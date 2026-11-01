@@ -32,3 +32,6 @@ htmlcov/
 *.db
 *.db-journal
 config.local.json
+
+# PyInstaller
+*.spec
