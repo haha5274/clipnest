@@ -6,6 +6,12 @@ Windows 剪贴板历史管理器。后台记录复制过的文字、图片、文
 
 数据存在本地 SQLite 文件里，不联网。只用 Python 标准库，不需要装第三方包。
 
+## 下载
+
+不想装 Python 的话，去 [Releases](https://github.com/haha5274/clipnest/releases/latest) 下载 `ClipNest.exe`，双击就能用，不用解压也不用安装。
+
+exe 没有代码签名，第一次运行 Windows 会拦一下：点「更多信息」→「仍要运行」。介意这一步就从下面的源码方式跑。
+
 ## 功能
 
 - 记录文本、图片、文件和富文本，图片显示缩略图，复制时按原格式写回
@@ -19,7 +25,7 @@ Windows 剪贴板历史管理器。后台记录复制过的文字、图片、文
 - 再开一个实例不会报错，它会把已经运行的那个窗口叫出来
 - 默认保留 500 条，超出后淘汰最旧的
 
-## 运行
+## 从源码运行
 
 需要 Windows 和 Python 3.9 以上（[官方安装包](https://www.python.org/downloads/windows/) 自带 tkinter）。
 
@@ -29,9 +35,20 @@ cd clipnest
 python -m clipnest
 ```
 
-双击 `run.pyw` 可以不弹控制台窗口。也可以 `pip install .` 装成命令，`clipnest --hidden` 启动即隐藏。
+不想开终端就双击 `run.bat`，它自己找 `pythonw` 静默启动；找不到 Python 会提示去哪里装。`pip install .` 装成命令后，`clipnest --hidden` 可以启动即隐藏。
 
 窗口出来后去别处复制点东西，再按 `Ctrl+Alt+V` 试试。
+
+## 打包 exe
+
+```bash
+pip install pyinstaller
+build.bat
+```
+
+产物是 `dist\ClipNest.exe`，单文件免安装，里面只有标准库和 tkinter。
+
+图标不是外部图片，是 `tools/make_icon.py` 现算出来的：按几何形状在 4 倍超采样网格上逐点判断覆盖，再缩到 16 到 256 七个尺寸，256 那档存 PNG（否则单个条目就是 256 KB 裸位图），最后手写 ICO 结构拼起来。改配色改文件顶部的常量就行。
 
 ## 快捷键
 
@@ -96,8 +113,14 @@ clipnest/
 │   ├── search.py       # 匹配打分
 │   └── config.py       # 配置读写
 ├── tests/
-├── run.pyw
-└── docs/screenshot.png
+├── tools/make_icon.py  # 生成 docs/clipnest.ico
+├── docs/
+│   ├── clipnest.ico
+│   └── screenshot.png
+├── run.pyw             # 双击启动，无控制台
+├── run.bat             # 双击启动，自动找 pythonw
+├── build.bat           # 打包成 dist\ClipNest.exe
+└── pyproject.toml
 ```
 
 ## 测试
@@ -116,6 +139,7 @@ python -m unittest discover -s tests -v
 - 图片只处理 `CF_DIB`，`CF_BITMAP` 之类没做
 - 托盘图标是运行时画的 16×16 位图，125% 以上缩放时会有点糊；系统托盘本身缩放的话只能交给 Windows 拉伸
 - 单个条目上限 512 KB（`max_text_kb`），超了跳过不记
+- 单文件 exe 每次启动都要把内容解压到临时目录，冷启动 1~2 秒；它是常驻后台的，一次启动就够了
 
 ## TODO
 

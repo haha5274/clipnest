@@ -9,6 +9,7 @@ import sys
 import threading
 import time
 import tkinter as tk
+from pathlib import Path
 
 from . import winclip
 from .config import Config, db_path
@@ -27,6 +28,21 @@ MUTED = "#8b939e"
 ACCENT = "#2f6fed"
 STAR = "#e39b2f"
 FONT = "Microsoft YaHei UI"
+
+
+def asset(name: str) -> Path | None:
+    """在打包后的临时目录或源码目录中找随包资源。"""
+    bases = []
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        bases.append(Path(meipass))
+    here = Path(__file__).resolve()
+    bases += [here.parent, here.parents[1] / "docs"]
+    for base in bases:
+        candidate = base / name
+        if candidate.exists():
+            return candidate
+    return None
 
 
 def human_time(ts: float) -> str:
@@ -175,6 +191,12 @@ class ClipNestApp:
         sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
         root.geometry(f"{w}x{h}+{max(0, (sw - w) // 2)}+{max(0, (sh - h) // 3)}")
         root.minsize(560, 420)
+        icon = asset("clipnest.ico")
+        if icon:
+            try:
+                root.iconbitmap(default=str(icon))
+            except tk.TclError:
+                pass
         root.protocol("WM_DELETE_WINDOW", self.hide)
 
         header = tk.Frame(root, bg=BG)

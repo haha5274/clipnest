@@ -9,6 +9,9 @@ dist/
 *.egg-info/
 .eggs/
 
+# Icon preview rendered by tools/make_icon.py
+docs/icon-preview.png
+
 # Virtual environments
 .venv/
 venv/
