@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "clipnest"
+version = "0.1.0"
+description = "Windows 剪贴板历史管理器"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+keywords = ["clipboard", "clipboard-manager", "productivity", "windows", "tkinter"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Win32 (MS Windows)",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3",
+    "Topic :: Desktop Environment",
+    "Topic :: Utilities",
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/your-name/clipnest"
+Issues = "https://github.com/your-name/clipnest/issues"
+
+[project.gui-scripts]
+clipnest = "clipnest.__main__:main"
+
+[tool.setuptools]
+packages = ["clipnest"]
