@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import os
 import queue
 import sys
 import threading
@@ -13,7 +14,9 @@ from . import winclip
 from .config import Config, db_path
 from .hotkey import HotkeyManager
 from .imageutil import DibError, dib_to_png
-from .store import Store
+from .instance import SingleInstance
+from .store import Store, unpack
+from .tray import TrayIcon
 
 BG = "#f4f5f7"
 CARD = "#ffffff"
@@ -67,22 +70,39 @@ class ClipboardWatcher(threading.Thread):
                 self.queue.put(("clip", payload))
 
     def _capture(self) -> dict | None:
-        text = None
-        try:
-            text = winclip.read_text()
-        except OSError:
+        files = self._quiet(winclip.read_files)
+        if files:
+            return {"kind": "files", "paths": files}
+
+        rich = self._quiet(winclip.read_rich) or {}
+        html = rich.get("html")
+        rtf = rich.get("rtf")
+        if html and len(html) > self.cfg.max_text_kb * 1024:
+            html = None
+        if rtf and len(rtf) > self.cfg.max_text_kb * 1024:
+            rtf = None
+
+        text = self._quiet(winclip.read_text)
+        if text and not text.strip():
             text = None
-        if text and text.strip():
-            if len(text.encode("utf-8", "ignore")) <= self.cfg.max_text_kb * 1024:
-                return {"kind": "text", "text": text}
-            return None
+        if text and len(text.encode("utf-8", "ignore")) > self.cfg.max_text_kb * 1024:
+            text = None
+
+        if html or rtf:
+            preview = text or ""
+            if not preview and html:
+                preview = winclip.html_to_text(html)
+            if not preview and rtf:
+                preview = winclip.rtf_to_text(rtf)
+            return {"kind": "rich", "text": text, "html": html, "rtf": rtf,
+                    "preview": preview}
+
+        if text:
+            return {"kind": "text", "text": text}
 
         if not self.cfg.capture_images:
             return None
-        try:
-            dib = winclip.read_dib()
-        except OSError:
-            return None
+        dib = self._quiet(winclip.read_dib)
         if not dib:
             return None
         try:
@@ -93,16 +113,24 @@ class ClipboardWatcher(threading.Thread):
         return {"kind": "image", "dib": dib, "thumb": thumb, "png": png,
                 "width": width, "height": height}
 
+    @staticmethod
+    def _quiet(fn):
+        try:
+            return fn()
+        except OSError:
+            return None
+
     def stop(self) -> None:
         self._stop.set()
 
 
 class ClipNestApp:
     def __init__(self, root: tk.Tk, store: Store, cfg: Config,
-                 autostart: bool = True):
+                 autostart: bool = True, instance: SingleInstance | None = None):
         self.root = root
         self.store = store
         self.cfg = cfg
+        self.instance = instance
         self.events: queue.Queue = queue.Queue()
         self.query = ""
         self.items: list[dict] = []
@@ -116,6 +144,7 @@ class ClipNestApp:
 
         self.watcher = None
         self.hotkey = None
+        self.tray = None
         if autostart:
             self.watcher = ClipboardWatcher(self.events, cfg)
             self.watcher.start()
@@ -125,6 +154,15 @@ class ClipNestApp:
                 lambda msg: self.events.put(("error", msg)),
             )
             self.hotkey.start()
+            self.tray = TrayIcon(
+                f"ClipNest · {cfg.hotkey}",
+                on_show=lambda: self.events.put(("tray_show", None)),
+                on_clear=lambda: self.events.put(("tray_clear", None)),
+                on_quit=lambda: self.events.put(("tray_quit", None)),
+            )
+            self.tray.start()
+            if instance is not None:
+                instance.listen(lambda: self.events.put(("wake", None)))
 
         self.root.after(120, self._pump)
 
@@ -239,7 +277,7 @@ class ClipNestApp:
         widgets: list[tk.Widget] = [row]
 
         star = tk.Label(row, text="★" if item["pinned"] else "☆", bg=CARD,
-                        fg=STAR if item["pinned"] else "#c9ced6",
+                        fg=STAR if item["pinned"] else "#aeb6c2",
                         font=(FONT, 11), width=2, cursor="hand2")
         star.pack(side="left", padx=(6, 0))
         widgets.append(star)
@@ -257,20 +295,37 @@ class ClipNestApp:
         col.pack(side="left", fill="x", expand=True, pady=6)
         widgets.append(col)
 
-        if item["kind"] == "image":
+        kind = item["kind"]
+        names: list[str] = []
+        if kind == "image":
             preview = f"图片 · {item['width']}×{item['height']}"
+        elif kind == "files":
+            names = [os.path.basename(p) or p for p in item["content"].splitlines() if p]
+            preview = " · ".join(names[:3])
+            if len(names) > 3:
+                preview += f" 等 {len(names)} 个文件"
+            badge = tk.Label(col, text=f"文件 ×{len(names)}", bg="#eef3ff",
+                             fg=ACCENT, font=(FONT, 8), padx=6, pady=1)
+            badge.pack(anchor="w", pady=(0, 3))
         else:
             preview = " ".join((item["preview"] or item["content"]).split())
             if len(preview) > 120:
                 preview = preview[:120] + "…"
+            if kind == "rich":
+                badge = tk.Label(col, text="富文本", bg="#eef3ff", fg=ACCENT,
+                                 font=(FONT, 8), padx=6, pady=1)
+                badge.pack(anchor="w", pady=(0, 3))
 
         title = tk.Label(col, text=preview, bg=CARD, fg=TEXT, font=(FONT, 10),
                          anchor="w", justify="left")
         title.pack(fill="x")
         widgets.append(title)
 
-        if item["kind"] == "image":
+        if kind == "image":
             meta = f"{human_time(item['ts'])} · 使用 {item['use_count']} 次"
+        elif kind == "files":
+            meta = (f"{human_time(item['ts'])} · {len(names)} 个文件"
+                    f" · 使用 {item['use_count']} 次")
         else:
             meta = (f"{human_time(item['ts'])} · {len(item['content'])} 字符"
                     f" · 使用 {item['use_count']} 次")
@@ -351,9 +406,24 @@ class ClipNestApp:
         item = self.current()
         if not item:
             return "break"
+        kind = item["kind"]
         try:
-            if item["kind"] == "text":
+            if kind == "text":
                 winclip.write_text(item["content"])
+            elif kind == "files":
+                paths = [p for p in item["content"].splitlines() if p]
+                alive = [p for p in paths if os.path.exists(p)]
+                if not alive:
+                    self.set_status("这些文件已经不在了，无法复制")
+                    return "break"
+                winclip.write_files(alive)
+                if len(alive) < len(paths):
+                    self.set_status(f"有 {len(paths) - len(alive)} 个文件已不存在，只复制了剩下的")
+            elif kind == "rich":
+                data = unpack(item["payload"])
+                html = base64.b64decode(data["html"]) if data.get("html") else None
+                rtf = base64.b64decode(data["rtf"]) if data.get("rtf") else None
+                winclip.write_bundle(data.get("text"), html, rtf)
             elif item.get("dib"):
                 winclip.write_dib(item["dib"])
             else:
@@ -428,6 +498,15 @@ class ClipNestApp:
                     self._on_clip(payload)
                 elif kind == "hotkey":
                     self.toggle()
+                elif kind == "wake":
+                    self.show()
+                elif kind == "tray_show":
+                    self.show()
+                elif kind == "tray_clear":
+                    self._clear()
+                elif kind == "tray_quit":
+                    self.quit()
+                    return
                 elif kind == "error":
                     self.set_status(payload)
         except queue.Empty:
@@ -435,8 +514,14 @@ class ClipNestApp:
         self.root.after(120, self._pump)
 
     def _on_clip(self, payload: dict) -> None:
-        if payload["kind"] == "text":
+        kind = payload["kind"]
+        if kind == "text":
             self.store.add_text(payload["text"])
+        elif kind == "files":
+            self.store.add_files(payload["paths"])
+        elif kind == "rich":
+            self.store.add_rich(payload["text"], payload["html"], payload["rtf"],
+                                payload["preview"])
         else:
             self.store.add_image(payload["dib"], payload["png"], payload["thumb"],
                                  payload["width"], payload["height"])
@@ -457,6 +542,10 @@ class ClipNestApp:
                 self.watcher.stop()
             if self.hotkey:
                 self.hotkey.stop()
+            if self.tray:
+                self.tray.stop()
+            if self.instance is not None:
+                self.instance.release()
         finally:
             self.store.close()
             self.root.destroy()
@@ -474,11 +563,18 @@ def _enable_dpi_awareness() -> None:
 
 def run(hidden: bool = False, db_file: str | None = None) -> int:
     _enable_dpi_awareness()
+    instance = SingleInstance()
+    if not instance.acquire():
+        instance.signal_existing()
+        return 0
     cfg = Config.load()
     store = Store(db_file or db_path())
     root = tk.Tk()
-    app = ClipNestApp(root, store, cfg)
+    app = ClipNestApp(root, store, cfg, instance=instance)
     if hidden:
         app.hide()
-    root.mainloop()
+    try:
+        root.mainloop()
+    finally:
+        instance.release()
     return 0

@@ -108,6 +108,41 @@ class AppSmokeTests(unittest.TestCase):
         self.assertEqual(len(self.app.rows), 1)
         self.assertEqual(self.app.items[0]["kind"], "image")
 
+    def test_files_row_renders_and_copies(self) -> None:
+        from clipnest import winclip
+
+        path = Path(self.tmp.name) / "note.txt"
+        path.write_text("x", encoding="utf-8")
+        self.store.add_files([str(path)])
+        self.app.refresh()
+        self.assertEqual(self.app.items[0]["kind"], "files")
+        self.assertEqual(len(self.app.rows), 1)
+
+        self.app._copy_selected()
+        self.assertEqual(winclip.read_files(), [str(path)])
+
+    def test_files_copy_skips_missing_paths(self) -> None:
+        from clipnest import winclip
+
+        alive = Path(self.tmp.name) / "alive.txt"
+        alive.write_text("x", encoding="utf-8")
+        gone = Path(self.tmp.name) / "gone.txt"
+        self.store.add_files([str(alive), str(gone)])
+        self.app.refresh()
+        self.app._copy_selected()
+        self.assertEqual(winclip.read_files(), [str(alive)])
+
+    def test_rich_row_renders_and_copies(self) -> None:
+        from clipnest import winclip
+
+        self.store.add_rich("Hello world", b"<b>Hello</b> world", None, "Hello world")
+        self.app.refresh()
+        self.assertEqual(self.app.items[0]["kind"], "rich")
+        self.assertEqual(len(self.app.rows), 1)
+
+        self.app._copy_selected()
+        self.assertEqual(winclip.read_text(), "Hello world")
+
 
 if __name__ == "__main__":
     unittest.main()

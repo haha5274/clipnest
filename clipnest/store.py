@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
+import json
 import sqlite3
 import time
+import zlib
 from pathlib import Path
 
 from .search import rank
@@ -12,10 +15,10 @@ from .search import rank
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS items (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    kind       TEXT    NOT NULL,           -- 'text' | 'image'
-    content    TEXT    NOT NULL,           -- 文本内容 / 图片占位描述
+    kind       TEXT    NOT NULL,           -- 'text' | 'image' | 'files' | 'rich'
+    content    TEXT    NOT NULL,           -- 文本内容 / 图片占位描述 / 文件路径
     preview    TEXT    NOT NULL DEFAULT '',
-    payload    BLOB,                       -- 图片 PNG（缩略后的原图）
+    payload    BLOB,                       -- 图片 PNG；文件与富文本是 zlib 压缩的 JSON
     thumb      BLOB,                       -- 列表用极小缩略图
     dib        BLOB,                       -- 原始 CF_DIB，用于回写剪贴板
     width      INTEGER,
@@ -27,6 +30,19 @@ CREATE TABLE IF NOT EXISTS items (
 );
 CREATE INDEX IF NOT EXISTS idx_items_ts ON items(pinned DESC, ts DESC);
 """
+
+
+def pack(obj: object) -> bytes:
+    return zlib.compress(json.dumps(obj, ensure_ascii=False).encode("utf-8"), 6)
+
+
+def unpack(blob: bytes | None) -> dict:
+    if not blob:
+        return {}
+    try:
+        return json.loads(zlib.decompress(blob).decode("utf-8"))
+    except (zlib.error, ValueError):
+        return {}
 
 
 class Store:
@@ -74,6 +90,29 @@ class Store:
         return self._upsert("image", content, content, hash_,
                             payload=png, thumb=thumb, dib=dib,
                             width=width, height=height)
+
+    def add_files(self, paths: list[str]) -> int | None:
+        if not paths:
+            return None
+        blob = pack({"paths": paths})
+        hash_ = "f:" + hashlib.sha256("\x00".join(paths).encode("utf-8", "ignore")).hexdigest()
+        names = [Path(p).name or p for p in paths]
+        preview = "、".join(names[:4]) + (f" 等 {len(names)} 个文件" if len(names) > 4
+                                         else f"（{len(names)} 个文件）")
+        return self._upsert("files", "\n".join(paths), preview, hash_, payload=blob)
+
+    def add_rich(self, text: str | None, html: bytes | None, rtf: bytes | None,
+                 preview: str) -> int | None:
+        if not (text or html or rtf):
+            return None
+        blob = pack({
+            "text": text,
+            "html": base64.b64encode(html).decode("ascii") if html else None,
+            "rtf": base64.b64encode(rtf).decode("ascii") if rtf else None,
+        })
+        hash_ = "r:" + hashlib.sha256(blob).hexdigest()
+        preview = " ".join(preview.split())[:400]
+        return self._upsert("rich", text or preview, preview, hash_, payload=blob)
 
     def touch(self, item_id: int) -> None:
         self.db.execute(
